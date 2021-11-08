@@ -22,16 +22,18 @@
 #include "soc/i2s_reg.h"
 
 
-#define I2S_NUM_RX  I2S_NUM_0
-#define I2S_NUM_TX  I2S_NUM_1
+#define I2S_NUM     I2S_NUM_0
 
-#define PIN_NUM_MISO GPIO_NUM_4
-#define PIN_NUM_MOSI GPIO_NUM_2
-#define PIN_NUM_CLK  GPIO_NUM_0
-#define PIN_NUM_CS   GPIO_NUM_5
-#define PIN_NUM_LD   GPIO_NUM_32
 
-#define I2S_MCK_IO      (GPIO_NUM_22)
+#define STEREO_SAMPLES 64
+
+#define PIN_SPI_MISO GPIO_NUM_4
+#define PIN_SPI_MOSI GPIO_NUM_2
+#define PIN_SPI_CLK  GPIO_NUM_22
+#define PIN_SPI_CS   GPIO_NUM_5
+#define PIN_SPI_LD   GPIO_NUM_32
+
+#define I2S_MCK_IO      (GPIO_NUM_0)
 #define I2S_BCK_IO      (GPIO_NUM_27)
 #define I2S_WS_IO       (GPIO_NUM_26)
 #define I2S_DO_IO       (GPIO_NUM_23)
@@ -177,13 +179,13 @@ static void print_char_val_type(esp_adc_cal_value_t val_type)
 }
 
 static esp_err_t spi_init(spi_device_handle_t *spi){
-  gpio_set_direction(PIN_NUM_LD, GPIO_MODE_OUTPUT);
-  gpio_set_level(PIN_NUM_LD, 1);
+  gpio_set_direction(PIN_SPI_LD, GPIO_MODE_OUTPUT);
+  gpio_set_level(PIN_SPI_LD, 1);
     esp_err_t ret;
     spi_bus_config_t buscfg={
-      .mosi_io_num=PIN_NUM_MOSI,
-      .miso_io_num=PIN_NUM_MISO,
-      .sclk_io_num=PIN_NUM_CLK,
+      .mosi_io_num=PIN_SPI_MOSI,
+      .miso_io_num=PIN_SPI_MISO,
+      .sclk_io_num=PIN_SPI_CLK,
       .quadwp_io_num=-1,
       .quadhd_io_num=-1,
       .data4_io_num=-1,
@@ -208,7 +210,7 @@ static esp_err_t spi_init(spi_device_handle_t *spi){
             delay before the MISO is ready on the line. Leave at 0 unless you know you need a delay. For better timing
             performance at high frequency (over 8MHz), it's suggest to have the right value.
             */
-      .spics_io_num=PIN_NUM_CS,               ///< CS GPIO pin for this device, or -1 if not used
+      .spics_io_num=PIN_SPI_CS,               ///< CS GPIO pin for this device, or -1 if not used
       .flags=0,                 ///< Bitwise OR of SPI_DEVICE_* flags
       .queue_size=1,                  //We want to be able to queue 1 transactions at a time
       .pre_cb=NULL,
@@ -264,133 +266,120 @@ void send_line(spi_device_handle_t spi, uint8_t *TX_buff, uint8_t *RX_buff)
     assert(ret==ESP_OK);
 }
 
-esp_err_t i2s_init_rx(void){
+esp_err_t i2s_init(void){
   esp_err_t ret;
 
   i2s_config_t i2s_config = {
-      .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX),
-      .sample_rate = 40000,
+      .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX | I2S_MODE_RX),
+      .sample_rate = 48000,
       .bits_per_sample = I2S_BITS_PER_CHAN_32BIT,
       .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT,
-//      .communication_format = I2S_COMM_FORMAT_STAND_I2S,
-      .communication_format = I2S_COMM_FORMAT_STAND_MSB,
-      .intr_alloc_flags = ESP_INTR_FLAG_LEVEL3, //greater than LEVEL3 causes panic
-      .dma_buf_count = 4,
-      .dma_buf_len = 1024,
-      .use_apll = false,
+      .communication_format = I2S_COMM_FORMAT_STAND_I2S,
+//      .communication_format = I2S_COMM_FORMAT_STAND_MSB,
+      .intr_alloc_flags = ESP_INTR_FLAG_LEVEL2, //greater than LEVEL3 causes panic
+      .dma_buf_count = 2,
+      .dma_buf_len = STEREO_SAMPLES * 2 * 4,
+      .use_apll = 1,
       .tx_desc_auto_clear = false,
-      .fixed_mclk = 0,
-      .mclk_multiple = 0,
-      .bits_per_chan = 0
+      .fixed_mclk = 12288000,
+      .mclk_multiple = 256,
+//      .bits_per_chan = 0
   };
-
-  //fix for sph0645 (maybe need to test different communication_format?)
-  //https://www.youtube.com/watch?v=3g7l5bm7fZ8
-  //https://github.com/atomic14/esp32_audio/blob/master/i2s_sampling/src/I2SMEMSSampler.cpp
-//  REG_SET_BIT(I2S_TIMING_REG(I2S_NUM_0), BIT(9));
-//  REG_SET_BIT(I2S_CONF_REG(I2S_NUM_0), I2S_RX_MSB_SHIFT);
 
   i2s_pin_config_t pin_config = {
-      .mck_io_num = -1,
-      .bck_io_num = I2S_BCK_IO,
-      .ws_io_num = I2S_WS_IO,
-      .data_out_num = -1, //I2S_DO_IO,
-      .data_in_num = I2S_DI_IO                                               //Not used
-  };
-  ret = i2s_driver_install((i2s_port_t) I2S_NUM_RX, &i2s_config, 4, &i2s_queue);
-  ESP_ERROR_CHECK(ret);
-  ret = i2s_set_pin(I2S_NUM_RX, &pin_config);
-  ESP_ERROR_CHECK(ret);
-  return ret;
-}
-
-esp_err_t i2s_init_tx(void){
-  esp_err_t ret;
-
-  i2s_config_t i2s_config = {
-      .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX),
-      .sample_rate = 40000,
-      .bits_per_sample = I2S_BITS_PER_CHAN_32BIT,
-      .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT,
-//      .communication_format = I2S_COMM_FORMAT_STAND_I2S,
-      .communication_format = I2S_COMM_FORMAT_STAND_MSB,
-      .intr_alloc_flags = ESP_INTR_FLAG_LEVEL3, //greater than LEVEL3 causes panic
-      .dma_buf_count = 4,
-      .dma_buf_len = 1024,
-      .use_apll = false,
-      .tx_desc_auto_clear = false,
-      .fixed_mclk = 0,
-      .mclk_multiple = 0,
-      .bits_per_chan = 0
-  };
-
-  //fix for sph0645 (maybe need to test different communication_format?)
-  //https://www.youtube.com/watch?v=3g7l5bm7fZ8
-  //https://github.com/atomic14/esp32_audio/blob/master/i2s_sampling/src/I2SMEMSSampler.cpp
-//  REG_SET_BIT(I2S_TIMING_REG(I2S_NUM_0), BIT(9));
-//  REG_SET_BIT(I2S_CONF_REG(I2S_NUM_0), I2S_RX_MSB_SHIFT);
-
-  i2s_pin_config_t pin_config = {
-      .mck_io_num = -1,
+      .mck_io_num = I2S_MCK_IO,
       .bck_io_num = I2S_BCK_IO,
       .ws_io_num = I2S_WS_IO,
       .data_out_num = I2S_DO_IO,
-      .data_in_num = -1 //I2S_DI_IO                                               //Not used
+      .data_in_num = I2S_DI_IO                                               //Not used
   };
-  ret = i2s_driver_install((i2s_port_t) I2S_NUM_TX, &i2s_config, 4, &i2s_queue);
+  ret = i2s_driver_install((i2s_port_t) I2S_NUM, &i2s_config, 4, &i2s_queue);
+//  ret = i2s_driver_install((i2s_port_t) I2S_NUM_TX, &i2s_config, 0, NULL);
   ESP_ERROR_CHECK(ret);
-  ret = i2s_set_pin(I2S_NUM_TX, &pin_config);
+  ret = i2s_set_pin(I2S_NUM, &pin_config);
   ESP_ERROR_CHECK(ret);
   return ret;
 }
+
+uint32_t TOTAL_READS[40000] = {0};
+uint16_t read_index = 0;
 
 void i2sTask(void *param)
 {
     i2s_event_t evt;
-    uint8_t i2sRX[1024];
-    int32_t *samples = (int32_t *)i2sRX;
+    esp_err_t ret;
+    uint8_t i2sRX[STEREO_SAMPLES * 2 * 4];
+    int32_t *samplesRX = (int32_t *)i2sRX;
+    uint8_t i2sTX[STEREO_SAMPLES * 2 * 4];
+    int32_t *samplesTX = (int32_t *)i2sTX;
     size_t bytesRead = 0;
-    volatile uint32_t foo = 0;
-    volatile uint32_t bar = 0;
+    size_t bytesWritten = 0;
     volatile int32_t max = 0;
     volatile int32_t min = 0x80000000;
+    volatile int i;
+    volatile uint32_t tx_val = 0;
+    volatile int foo;
+
+    for (i=0; i<STEREO_SAMPLES * 2; i++){
+      samplesTX[i] = tx_val++;
+    }
+    volatile bool starting = true;
+
+    ret = i2s_write(I2S_NUM, i2sTX, STEREO_SAMPLES * 2 * 4, &bytesWritten, portMAX_DELAY);
+
     while (1)
     {
 //        // wait for some data to arrive on the queue
-
-        if (xQueueReceive(i2s_queue, &evt, portMAX_DELAY) == pdPASS)
-        {
-            if (evt.type == I2S_EVENT_RX_DONE)
-            {
-//              foo++;
-                bytesRead= 0;
-                bar++;
-                bar = foo * bar;
-                max = 0;
-                min = 0x80000000;
-                i2s_read(I2S_NUM_RX, i2sRX, 1024, &bytesRead, 10);
-//                printf("queue space avail: %d\n", uxQueueSpacesAvailable(i2s_queue));
-                if (uxQueueSpacesAvailable(i2s_queue) < 2){
-                  printf("DANGER QUEUE MAX\n");
-                }
-                for (int i=0;i<1024/4;i++){
-                  max = (samples[i]>max)?samples[i]:max;
-                  min = (samples[i]<min)?samples[i]:min;
-                }
-                if (max > 0){
-                  printf("I2S max: %d, min: %d\n", max, min);
-                }
-//                do
-//                {
-//                    foo++;
-////                    // read data from the I2S peripheral
-////                    // read from i2s
-//                    i2s_read(I2S_NUM_0, i2sRX, 1024, &bytesRead, 10);
-////                    // process the raw data
-////                    //sampler->processI2SData(i2sRX, bytesRead);
-//                } while (bytesRead > 0);
-            }
+      ret = i2s_read (I2S_NUM, i2sRX, STEREO_SAMPLES * 2 * 4, &bytesRead,    portMAX_DELAY);
+      if(starting && tx_val>5000) {
+        tx_val = 0;
+        starting = false;
+      }
+      for (i=0; i<STEREO_SAMPLES * 2; i++){
+        samplesTX[i] = tx_val++;
+        TOTAL_READS[read_index++] = samplesRX[i];
+        if (read_index>=40000){
+          read_index = 0;
         }
+      }
+      ret = i2s_write(I2S_NUM, i2sTX, STEREO_SAMPLES * 2 * 4, &bytesWritten, portMAX_DELAY);
+      taskYIELD();
+
+//        if (xQueueReceive(i2s_queue, &evt, portMAX_DELAY) == pdPASS)
+//        {
+//            if (evt.type == I2S_EVENT_RX_DONE)
+//            {
+//                foo++;
+//                bytesRead= 0;
+//                max = 0;
+//                min = 0x80000000;
+//                i2s_read(I2S_NUM, i2sRX, STEREO_SAMPLES * 2, &bytesRead, 10);
+////                printf("queue space avail: %d\n", uxQueueSpacesAvailable(i2s_queue));
+//                if (uxQueueSpacesAvailable(i2s_queue) < 2){
+//                  printf("DANGER QUEUE MAX\n");
+//                }
+//                printf("ret: %d\n", ret);
+//                for (int x=0; x<STEREO_SAMPLES * 2; x++){
+//                  printf("%d: %d\n", samplesTX[x], samplesRX[x]);
+//                }
+//                for (int i=0;i<STEREO_SAMPLES * 2;i++){
+//                  max = (samplesRX[i]>max)?samplesRX[i]:max;
+//                  min = (samplesRX[i]<min)?samplesRX[i]:min;
+//                }
+//                if (max > 0){
+//                  printf("I2S max: %d, min: %d\n", max, min);
+//                }
+////                do
+////                {
+////                    foo++;
+//////                    // read data from the I2S peripheral
+//////                    // read from i2s
+////                    i2s_read(I2S_NUM_0, i2sRX, STEREO_SAMPLES * 2, &bytesRead, 10);
+//////                    // process the raw data
+//////                    //sampler->processI2SData(i2sRX, bytesRead);
+////                } while (bytesRead > 0);
+//            }
+//        }
     }
 }
 
@@ -405,41 +394,22 @@ void app_main(void)
   ESP_ERROR_CHECK(i2c_master_init());
   uint8_t sensor_data_h, sensor_data_l;
 
-  ESP_ERROR_CHECK(i2s_init_rx());
-//  ESP_ERROR_CHECK(i2s_init_tx());
+  ESP_ERROR_CHECK(i2s_init());
 
-//  xControlRXQ = xQueueCreate(4, sizeof(U32));
-//  if (xControlRXQ == 0) {
-//    for (;;)
-//    ;
-//  }
-//  vQueueAddToRegistry(xControlRXQ, (S8 *) "xControlRXQ");
-//  TaskHandle_t readerTaskHandle;
-  xTaskCreate( i2sTask
-  , "i2s Task"
-  , 0x1000 // stack size
-  , NULL
-  , 3 // Audio (3) > SD (2) > Log (1) > Control (0)
-  , NULL );
+  xTaskCreatePinnedToCore(i2sTask,
+                          "i2s Task",
+                          4096,
+                          NULL,
+                          3,
+                          NULL, //&readerTaskHandle,
+                          1);
 
 
-//  xTaskCreatePinnedToCore(i2sTask,
-//                          "i2s Task",
-//                          4096,
-//                          NULL,
-//                          3,
-//                          NULL, //&readerTaskHandle,
-//                          1);
-
-
-  //Go do nice stuff.
   volatile unsigned int foo = 0;
   TX_buff[0] = 0xFF;
   TX_buff[1] = 0xFF;
-//    TX_buff[2] = 0xFF;
   send_line(spi, TX_buff, RX_buff);
   uint32_t adc_reading = 0;
-//    uint32_t last_reading = 0;
   while (1){
 
     foo += 1;
@@ -452,9 +422,9 @@ void app_main(void)
       TX_buff[1] = 0x00;
     }
 //    	TX_buff[2] = 0x33;
-    gpio_set_level(PIN_NUM_LD, 0);
+    gpio_set_level(PIN_SPI_LD, 0);
     __asm__ __volatile__("nop;nop;"); //hold LD low at least 4ns
-    gpio_set_level(PIN_NUM_LD, 1);
+    gpio_set_level(PIN_SPI_LD, 1);
 
     send_line(spi, TX_buff, RX_buff);
     vTaskDelay(10 / portTICK_PERIOD_MS);
