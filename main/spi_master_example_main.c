@@ -21,6 +21,8 @@
 #include "driver/i2s.h"
 #include "soc/i2s_reg.h"
 #include "driver/uart.h"
+#include "nvs.h"
+#include "nvs_flash.h"
 
 
 #define I2S_NUM     I2S_NUM_0
@@ -90,6 +92,45 @@ static const adc_unit_t unit = ADC_UNIT_1;
 #define ACK_CHECK_DIS 0x0                       /*!< I2C master will not check ack from slave */
 #define ACK_VAL 0x0                             /*!< I2C ack value */
 #define NACK_VAL 0x1                            /*!< I2C nack value */
+
+#define NVS_NAMESPACE "test_nvs"
+#define NVS_KEY "test_key"
+
+static esp_err_t nvs_init(nvs_handle_t *nvs){
+  esp_err_t err = nvs_flash_init();
+  if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+    ESP_ERROR_CHECK(nvs_flash_erase());
+    err = nvs_flash_init();
+  }
+  ESP_ERROR_CHECK(err);
+
+  printf("Opening Non-Volatile Storage (NVS) handle... ");
+  err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, nvs);
+  if (err != ESP_OK) {
+      printf("Error (%s) opening NVS handle!\n", esp_err_to_name(err));
+  }
+
+  uint32_t test_nvs = 0;
+  err = nvs_get_u32(*nvs, NVS_KEY, &test_nvs);
+  switch (err) {
+    case ESP_OK:
+      printf("Done\n");
+      printf("%s: %d\n", NVS_KEY, test_nvs);
+      break;
+    case ESP_ERR_NVS_NOT_FOUND:
+      printf("Not initialized\n");
+      err = nvs_set_u32(*nvs, NVS_KEY, 0xAA55);
+      printf((err != ESP_OK) ? "Failed set!\n" : "Done\n");
+      err = nvs_commit(*nvs);
+      printf((err != ESP_OK) ? "Failed commit!\n" : "Done\n");
+      break;
+
+    default:
+      printf("Error (%s) reading\n", esp_err_to_name(err));
+  }
+
+  return err;
+}
 
 /**
  * @brief test code to operate on BH1750 sensor
@@ -431,6 +472,9 @@ void app_main(void)
   printf("starting spi\n");
   esp_err_t ret;
 
+  nvs_handle_t nvs;
+  ESP_ERROR_CHECK(nvs_init(&nvs));
+
   spi_device_handle_t spi;
   ESP_ERROR_CHECK(spi_init(&spi));
 
@@ -454,6 +498,7 @@ void app_main(void)
   TX_buff[1] = 0xFF;
   send_line(spi, TX_buff, RX_buff);
   uint32_t adc_reading = 0;
+  uint32_t nvs_value = 0;
   while (1){
 
     foo += 1;
@@ -505,6 +550,16 @@ void app_main(void)
           ESP_LOGW("i2c-example", "%s: No ack, sensor not connected...skip...", esp_err_to_name(ret));
       }
       printf("%x %x,  Raw: %d\tVoltage: %dmV\n", RX_buff[0], RX_buff[1], adc_reading, voltage);
+      esp_err_t err = nvs_get_u32(nvs, NVS_KEY, &nvs_value);
+      printf((err != ESP_OK) ? "Failed!\n" : "Done\n");
+      printf("nvs_value: %x\n", nvs_value);
+      if (nvs_value == 0xAA55) {
+        nvs_value = 0xF0A5;
+      }
+      err = nvs_set_u32(nvs, NVS_KEY, nvs_value);
+      printf((err != ESP_OK) ? "Failed set!\n" : "Done\n");
+      err = nvs_commit(nvs);
+      printf((err != ESP_OK) ? "Failed commit!\n" : "Done\n");
     }
 
 
